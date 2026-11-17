@@ -30,6 +30,34 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出聚类分群清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "cluster", "total": total, "items": items}
+
+
+@router.get("/inputs")
+def get_inputs(sequence_id: int | None = None) -> dict[str, Any]:
+    """聚类输入分群明细数据集：聚类任务清单只消费这里的已确认序列版本。"""
+    items = service.list_inputs(sequence_id)
+    return {"module": "cluster_input", "total": len(items), "items": items}
+
+
+@router.get("/pending")
+def get_pending(only_open: bool = True) -> dict[str, Any]:
+    """聚类任务待处理清单：消费冲突及冲突原因都在这里，可逐条复核。"""
+    items = service.list_pending(only_open=only_open)
+    return {"module": "cluster_pending", "total": len(items), "items": items}
+
+
+@router.post("/sync-sequence-status")
+def sync_sequence_status() -> ActionResult:
+    """把行为序列（如 SEQU-0003）当前状态回写到聚类分群列表。"""
+    count = service.refresh_all_sequence_status()
+    return ActionResult(ok=True, message=f"已回写 {count} 个聚类任务的序列状态")
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条聚类任务明细；不存在时给出可读的错误说明。"""
@@ -41,7 +69,7 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条聚类任务，缺字段时说明原因而不是静默丢弃。"""
+    """登记一个聚类任务，缺字段时说明原因而不是静默丢弃。"""
     entry, missing = service.create_entry(payload.values)
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
@@ -50,16 +78,9 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条聚类任务执行启动聚类、确认完成、归档结果；不允许的动作会被拦下并说明原因。"""
+    """对单个聚类任务执行启动聚类、确认完成、归档结果、恢复结果；不允许的动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出聚类分群清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "cluster", "total": total, "items": items}

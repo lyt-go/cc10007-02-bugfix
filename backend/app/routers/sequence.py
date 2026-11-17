@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services.cluster_input import list_inputs
 from app.services.sequence import SequenceService
 
 router = APIRouter(prefix="/api/sequence", tags=["行为序列"])
@@ -30,6 +31,38 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出行为序列清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "sequence", "total": total, "items": items}
+
+
+@router.get("/cluster-inputs")
+def get_cluster_inputs(sequence_id: int | None = None) -> dict[str, Any]:
+    """聚类输入分群明细数据集：只包含已确认序列版本，旧版本保留可复核。"""
+    items = list_inputs(sequence_id)
+    return {"module": "cluster_input", "total": len(items), "items": items}
+
+
+@router.get("/{entry_id}/events")
+def get_events(entry_id: int) -> dict[str, Any]:
+    """暴露错误的事件记录：确认模式时后端从这里重读事件序列重算分群特征。"""
+    if service.get_entry(entry_id) is None:
+        raise HTTPException(status_code=404, detail=f"序列模式 {entry_id} 不存在或已归档")
+    items = service.list_events(entry_id)
+    return {"sequence_id": entry_id, "total": len(items), "items": items}
+
+
+@router.get("/{entry_id}/audit")
+def get_audit(entry_id: int) -> dict[str, Any]:
+    """变更切换、归档与恢复留痕，可按数据编号复查每一次状态推进。"""
+    if service.get_entry(entry_id) is None:
+        raise HTTPException(status_code=404, detail=f"序列模式 {entry_id} 不存在或已归档")
+    items = service.list_audit(entry_id)
+    return {"sequence_id": entry_id, "total": len(items), "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条序列模式明细；不存在时给出可读的错误说明。"""
@@ -50,16 +83,9 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条序列模式执行发起挖掘、确认模式、归档模式；不允许的动作会被拦下并说明原因。"""
+    """对单条序列模式执行发起挖掘、确认模式、归档模式、恢复模式；不允许的动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出行为序列清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "sequence", "total": total, "items": items}
